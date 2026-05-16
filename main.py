@@ -41,6 +41,14 @@ try:
 except ImportError:
     HAS_SYNCED = False
 
+# Prefer in-process AppleScript (NSAppleScript) so macOS ties the Automation
+# permission to SpotifyLyrics.app rather than to /usr/bin/osascript.
+try:
+    from AppKit import NSAppleScript
+    HAS_PYOBJC = True
+except ImportError:
+    HAS_PYOBJC = False
+
 CONFIG_FILE = Path.home() / ".spotify_lyrics_overlay.json"
 
 DEFAULT_CONFIG = {
@@ -342,9 +350,7 @@ class LyricsStrip:
 
     # ── Spotify via AppleScript ──────────────────────────────────────────────
 
-    @staticmethod
-    def _query_spotify() -> dict | None:
-        script = """
+    _SPOTIFY_SCRIPT = """
 tell application "System Events"
     if not (exists process "Spotify") then return "GONE"
 end tell
@@ -358,32 +364,55 @@ tell application "Spotify"
     end if
 end tell
 """
-        t_before = time.time()
-        try:
-            r = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=4,
-            )
-            t_after = time.time()
-            out = r.stdout.strip()
-            if out in ("GONE", "STOPPED", ""):
-                return None
-            parts = out.split("|||")
-            if len(parts) == 5:
-                raw_id = parts[1].strip()
-                # "spotify:track:XXXX" → "XXXX"
-                track_id = raw_id.split(":")[-1] if ":" in raw_id else raw_id
-                return {
-                    "playing"  : parts[0] == "PLAYING",
-                    "track_id" : track_id,
-                    "track"    : parts[2].strip(),
-                    "artist"   : parts[3].strip(),
-                    "position" : float(parts[4].strip()),
-                    "wall"     : (t_before + t_after) / 2,
-                }
-        except Exception:
-            pass
+
+    @staticmethod
+    def _run_applescript(source: str) -> str:
+        """
+        Run AppleScript in-process via NSAppleScript (pyobjc) when available.
+        macOS then prompts for Automation permission under SpotifyLyrics.app's
+        bundle ID rather than under /usr/bin/osascript.
+        Falls back to subprocess osascript if pyobjc is unavailable.
+        """
+        if HAS_PYOBJC:
+            script = NSAppleScript.alloc().initWithSource_(source)
+            result, error = script.executeAndReturnError_(None)
+            if error:
+                return ""
+            return result.stringValue() if result else ""
+        else:
+            try:
+                r = subprocess.run(
+                    ["osascript", "-e", source],
+                    capture_output=True, text=True, timeout=4,
+                )
+                return r.stdout.strip()
+            except Exception:
+                return ""
+
+    @staticmethod
+    def _parse_spotify_output(out: str, wall_mid: float) -> dict | None:
+        out = out.strip()
+        if out in ("GONE", "STOPPED", ""):
+            return None
+        parts = out.split("|||")
+        if len(parts) == 5:
+            raw_id   = parts[1].strip()
+            track_id = raw_id.split(":")[-1] if ":" in raw_id else raw_id
+            return {
+                "playing"  : parts[0] == "PLAYING",
+                "track_id" : track_id,
+                "track"    : parts[2].strip(),
+                "artist"   : parts[3].strip(),
+                "position" : float(parts[4].strip()),
+                "wall"     : wall_mid,
+            }
         return None
+
+    def _query_spotify(self) -> dict | None:
+        t_before = time.time()
+        out      = self._run_applescript(self._SPOTIFY_SCRIPT)
+        t_after  = time.time()
+        return self._parse_spotify_output(out, (t_before + t_after) / 2)
 
     # ── Interpolated position ────────────────────────────────────────────────
 

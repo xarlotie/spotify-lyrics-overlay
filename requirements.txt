@@ -1,1 +1,2 @@
 syncedlyrics>=0.3
+pyobjc-framework-Cocoa>=10.0
