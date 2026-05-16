@@ -374,11 +374,14 @@ end tell
         Falls back to subprocess osascript if pyobjc is unavailable.
         """
         if HAS_PYOBJC:
-            script = NSAppleScript.alloc().initWithSource_(source)
-            result, error = script.executeAndReturnError_(None)
-            if error:
+            try:
+                script = NSAppleScript.alloc().initWithSource_(source)
+                result, error = script.executeAndReturnError_(None)
+                if error:
+                    return ""
+                return result.stringValue() if result else ""
+            except Exception:
                 return ""
-            return result.stringValue() if result else ""
         else:
             try:
                 r = subprocess.run(

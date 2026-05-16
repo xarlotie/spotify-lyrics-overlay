@@ -77,13 +77,18 @@ PLIST="$PROJ/SpotifyLyrics.app/Contents/Info.plist"
 # ── 5. Clean up build artefacts ───────────────────────────────────────────
 rm -rf "$PROJ/build" "$PROJ/dist" "$PROJ/SpotifyLyrics.spec"
 
+# ── 6. Install to /Applications (using ditto to preserve symlinks) ────────
+echo "→  Installing to /Applications…"
+rm -rf /Applications/SpotifyLyrics.app
+ditto "$PROJ/SpotifyLyrics.app" /Applications/SpotifyLyrics.app
+xattr -dr com.apple.quarantine /Applications/SpotifyLyrics.app 2>/dev/null
+
 echo ""
-echo "✓  Built:  $PROJ/SpotifyLyrics.app"
+echo "✓  Built and installed: /Applications/SpotifyLyrics.app"
 echo ""
-echo "To share:"
+echo "Launch it from Spotlight, Launchpad, or your Dock."
+echo ""
+echo "To share with others:"
 echo "  cd \"$PROJ\" && zip -r SpotifyLyrics.zip SpotifyLyrics.app"
 echo "  → Send SpotifyLyrics.zip to anyone with an Intel Mac running macOS 12+"
-echo ""
-echo "First-launch note (on any Mac):"
-echo "  Right-click the .app → Open → click Open (one-time security prompt)"
-echo "  Or: System Settings → Privacy & Security → 'Open Anyway'"
+echo "  → Recipient: unzip, then right-click → Open (one-time security prompt)"
