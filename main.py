@@ -90,6 +90,10 @@ class LyricsStrip:
         # Wakes the lyric-sync thread on seek, track-change, or play/pause
         self._sync_event = threading.Event()
 
+        # Fetch generation: incremented on each track change so stale fetch
+        # threads don't overwrite the display after a song skip.
+        self._fetch_gen = 0
+
         # Permission guidance: track how many consecutive polls returned nothing
         self._consecutive_empty = 0
         self._ever_connected    = False
@@ -431,10 +435,11 @@ end tell
 
     # ── Lyrics providers ─────────────────────────────────────────────────────
 
-    def _fetch_lyrics_bg(self, track_id: str, track: str, artist: str):
+    def _fetch_lyrics_bg(self, track_id: str, track: str, artist: str, gen: int):
         """Fetch from all providers in parallel; use the first result that arrives."""
+        result_lock  = threading.Lock()
         result_event = threading.Event()
-        winner: list = []  # holds the first non-empty lines found
+        winner: list = []
 
         def try_provider(fn, *args):
             if result_event.is_set():
@@ -443,10 +448,11 @@ end tell
                 lines = fn(*args)
             except Exception:
                 lines = None
-            if lines and not result_event.is_set():
-                winner.clear()
-                winner.extend(lines)
-                result_event.set()
+            if lines:
+                with result_lock:
+                    if not result_event.is_set():
+                        winner.extend(lines)
+                        result_event.set()
 
         tasks = []
         if HAS_REQUESTS and track_id:
@@ -465,8 +471,11 @@ end tell
         for t in tasks:
             t.start()
 
-        # Wait up to 10 s for any provider to succeed
         result_event.wait(timeout=10)
+
+        # Discard result if a newer song has already started fetching
+        if gen != self._fetch_gen:
+            return
 
         if winner:
             self.lyrics_lines = list(winner)
@@ -532,20 +541,26 @@ end tell
     # 2 ── lrclib.net direct HTTP ─────────────────────────────────────────────
 
     def _fetch_lrclib(self, track: str, artist: str) -> list[tuple[float, str]] | None:
-        try:
-            q = urllib.parse.urlencode({"track_name": track, "artist_name": artist})
-            r = _req.get(
-                f"https://lrclib.net/api/get?{q}",
-                headers={"User-Agent": "SpotifyLyricsOverlay/2.0"},
-                timeout=4,
-            )
-            if r.ok:
-                data = r.json()
-                lrc  = data.get("syncedLyrics") or ""
-                if lrc:
-                    return self._parse_lrc(lrc)
-        except Exception:
-            pass
+        # Try exact match first, then search endpoint as fallback
+        queries = [
+            f"https://lrclib.net/api/get?{urllib.parse.urlencode({'track_name': track, 'artist_name': artist})}",
+            f"https://lrclib.net/api/search?{urllib.parse.urlencode({'track_name': track, 'artist_name': artist})}",
+        ]
+        for url in queries:
+            try:
+                r = _req.get(url, headers={"User-Agent": "SpotifyLyricsOverlay/2.0"}, timeout=4)
+                if r.ok:
+                    data = r.json()
+                    # /get returns a dict; /search returns a list — handle both
+                    items = data if isinstance(data, list) else [data]
+                    for item in items:
+                        lrc = item.get("syncedLyrics") or ""
+                        if lrc:
+                            lines = self._parse_lrc(lrc)
+                            if lines:
+                                return lines
+            except Exception:
+                pass
         return None
 
     # 3 ── syncedlyrics library ───────────────────────────────────────────────
@@ -669,6 +684,8 @@ end tell
                         self.current_track_id  = state["track_id"]
                         self.lyrics_lines      = []
                         self.current_line_text = ""
+                        self._fetch_gen       += 1
+                        gen = self._fetch_gen
                         n = state["track"]
                         self.root.after(0, lambda name=n: self.main_label.configure(
                             text=f"♫   Loading lyrics…  {name}"
@@ -676,7 +693,7 @@ end tell
                         self.root.after(0, lambda: self.next_label.configure(text=""))
                         threading.Thread(
                             target=self._fetch_lyrics_bg,
-                            args=(state["track_id"], state["track"], state["artist"]),
+                            args=(state["track_id"], state["track"], state["artist"], gen),
                             daemon=True,
                         ).start()
                         self._sync_event.set()
