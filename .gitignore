@@ -17,6 +17,8 @@ AppIcon.icns
 # Built app bundle (regenerate with build_app.sh)
 SpotifyLyrics.app/
 SpotifyLyrics.zip
+SpotifyLyrics-Installer.pkg
+_pkg_stage/
 
 # User config
 .spotify_lyrics_overlay.json
