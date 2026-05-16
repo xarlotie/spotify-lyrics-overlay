@@ -471,7 +471,7 @@ end tell
         for t in tasks:
             t.start()
 
-        result_event.wait(timeout=10)
+        result_event.wait(timeout=20)
 
         # Discard result if a newer song has already started fetching
         if gen != self._fetch_gen:
@@ -566,18 +566,16 @@ end tell
     # 3 ── syncedlyrics library ───────────────────────────────────────────────
 
     def _fetch_syncedlyrics(self, track: str, artist: str) -> list[tuple[float, str]] | None:
-        for providers in (["Lrclib"], ["Musixmatch"], []):
-            try:
-                kwargs = {"synced_only": True}
-                if providers:
-                    kwargs["providers"] = providers
-                lrc = syncedlyrics.search(f"{track} {artist}", **kwargs)
-                if lrc:
-                    lines = self._parse_lrc(lrc)
-                    if lines:
-                        return lines
-            except Exception:
-                pass
+        # Let the library try all its providers in its own order (one call).
+        # Specifying providers sequentially caused chained 10-second timeouts.
+        try:
+            lrc = syncedlyrics.search(f"{track} {artist}", synced_only=True)
+            if lrc:
+                lines = self._parse_lrc(lrc)
+                if lines:
+                    return lines
+        except Exception:
+            pass
         return None
 
     # ── LRC parser ───────────────────────────────────────────────────────────
