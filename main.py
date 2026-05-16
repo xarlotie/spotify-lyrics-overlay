@@ -436,51 +436,72 @@ end tell
     # ── Lyrics providers ─────────────────────────────────────────────────────
 
     def _fetch_lyrics_bg(self, track_id: str, track: str, artist: str, gen: int):
-        """Fetch from all providers in parallel; use the first result that arrives."""
-        result_lock  = threading.Lock()
-        result_event = threading.Event()
-        winner: list = []
+        """
+        Two-phase fetch so fast providers show lyrics immediately.
 
-        def try_provider(fn, *args):
-            if result_event.is_set():
+        Phase 1 (≤5 s): Spotify API + lrclib direct — both respond in 1-4 s.
+        Phase 2 (≤15 s): syncedlyrics library — slower but covers more songs.
+        Each phase posts results as soon as they arrive; song skips abort early.
+        """
+        def apply(lines):
+            """Post lyrics to the UI if this fetch is still current."""
+            if gen != self._fetch_gen:
+                return False
+            if lines:
+                self.lyrics_lines = list(lines)
+                self._sync_event.set()
+                return True
+            return False
+
+        # ── Phase 1: fast providers in parallel ──────────────────────────────
+        lock1   = threading.Lock()
+        event1  = threading.Event()
+        winner1: list = []
+
+        def try_fast(fn, *args):
+            if event1.is_set() or gen != self._fetch_gen:
                 return
             try:
                 lines = fn(*args)
             except Exception:
                 lines = None
             if lines:
-                with result_lock:
-                    if not result_event.is_set():
-                        winner.extend(lines)
-                        result_event.set()
+                with lock1:
+                    if not event1.is_set():
+                        winner1.extend(lines)
+                        event1.set()
 
-        tasks = []
+        fast_tasks = []
         if HAS_REQUESTS and track_id:
-            tasks.append(threading.Thread(
-                target=try_provider, args=(self._fetch_spotify_lyrics, track_id), daemon=True
+            fast_tasks.append(threading.Thread(
+                target=try_fast, args=(self._fetch_spotify_lyrics, track_id), daemon=True
             ))
         if HAS_REQUESTS:
-            tasks.append(threading.Thread(
-                target=try_provider, args=(self._fetch_lrclib, track, artist), daemon=True
+            fast_tasks.append(threading.Thread(
+                target=try_fast, args=(self._fetch_lrclib, track, artist), daemon=True
             ))
-        if HAS_SYNCED:
-            tasks.append(threading.Thread(
-                target=try_provider, args=(self._fetch_syncedlyrics, track, artist), daemon=True
-            ))
-
-        for t in tasks:
+        for t in fast_tasks:
             t.start()
 
-        result_event.wait(timeout=10)
+        event1.wait(timeout=5)
 
-        # Discard result if a newer song has already started fetching
+        if apply(winner1):
+            return  # done — lyrics found quickly
+
         if gen != self._fetch_gen:
-            return
+            return  # song changed while waiting
 
-        if winner:
-            self.lyrics_lines = list(winner)
-            self._sync_event.set()
-        else:
+        # ── Phase 2: syncedlyrics fallback ───────────────────────────────────
+        if HAS_SYNCED:
+            try:
+                lines = self._fetch_syncedlyrics(track, artist)
+            except Exception:
+                lines = None
+            if apply(lines):
+                return
+
+        # All providers failed
+        if gen == self._fetch_gen:
             self.lyrics_lines = []
             self.root.after(0, lambda: self.main_label.configure(
                 text=f"♫   {track}  —  {artist}"
@@ -566,15 +587,8 @@ end tell
     # 3 ── syncedlyrics library ───────────────────────────────────────────────
 
     def _fetch_syncedlyrics(self, track: str, artist: str) -> list[tuple[float, str]] | None:
-        # Skip Lrclib here — we query it directly in _fetch_lrclib with a 4s
-        # timeout.  Letting syncedlyrics try Lrclib first adds a 10s internal
-        # timeout before it falls back to Musixmatch, causing the 20s delay.
         try:
-            lrc = syncedlyrics.search(
-                f"{track} {artist}",
-                synced_only=True,
-                providers=["Musixmatch"],
-            )
+            lrc = syncedlyrics.search(f"{track} {artist}", synced_only=True)
             if lrc:
                 lines = self._parse_lrc(lrc)
                 if lines:
