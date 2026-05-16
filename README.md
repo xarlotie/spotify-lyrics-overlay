@@ -40,11 +40,23 @@ bash run.sh          # sets up venv, installs deps, launches the app
 
 ```bash
 bash build_app.sh
-# → SpotifyLyrics.app appears in the project folder
+# → SpotifyLyrics.app appears in the project folder and is installed to /Applications
 ```
 
-Double-click to launch. Drag to your Dock or Applications folder.  
-First launch: right-click → **Open** to bypass the macOS Gatekeeper prompt (app is not notarised).
+Double-click to launch. First launch: macOS will ask permission to control Spotify — click **OK**.
+
+## Build a .pkg installer (share with anyone)
+
+```bash
+bash build_installer.sh
+# → SpotifyLyrics-Installer.pkg appears in the project folder
+```
+
+Send the `.pkg` to any Mac running macOS 12+. The recipient:
+
+1. Double-clicks `SpotifyLyrics-Installer.pkg`
+2. Clicks through the installer (app lands in `/Applications`)
+3. On first launch, clicks **OK** when macOS asks permission to control Spotify
 
 ## Keyboard shortcuts
 
