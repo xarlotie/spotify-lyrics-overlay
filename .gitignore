@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller build artefacts
+build/
+dist/
+*.spec
+
+# Generated icon intermediates
+AppIcon.iconset/
+AppIcon.png
+AppIcon.icns
+
+# Built app bundle (regenerate with build_app.sh)
+SpotifyLyrics.app/
+SpotifyLyrics.zip
+
+# User config
+.spotify_lyrics_overlay.json
+
+# macOS
+.DS_Store
