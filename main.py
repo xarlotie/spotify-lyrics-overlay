@@ -432,24 +432,45 @@ end tell
     # ── Lyrics providers ─────────────────────────────────────────────────────
 
     def _fetch_lyrics_bg(self, track_id: str, track: str, artist: str):
-        """Try providers in order; store result in self.lyrics_lines."""
-        lines = None
+        """Fetch from all providers in parallel; use the first result that arrives."""
+        result_event = threading.Event()
+        winner: list = []  # holds the first non-empty lines found
 
-        # 1. Spotify's own lyrics API (same timestamps Spotify uses internally)
+        def try_provider(fn, *args):
+            if result_event.is_set():
+                return
+            try:
+                lines = fn(*args)
+            except Exception:
+                lines = None
+            if lines and not result_event.is_set():
+                winner.clear()
+                winner.extend(lines)
+                result_event.set()
+
+        tasks = []
         if HAS_REQUESTS and track_id:
-            lines = self._fetch_spotify_lyrics(track_id)
+            tasks.append(threading.Thread(
+                target=try_provider, args=(self._fetch_spotify_lyrics, track_id), daemon=True
+            ))
+        if HAS_REQUESTS:
+            tasks.append(threading.Thread(
+                target=try_provider, args=(self._fetch_lrclib, track, artist), daemon=True
+            ))
+        if HAS_SYNCED:
+            tasks.append(threading.Thread(
+                target=try_provider, args=(self._fetch_syncedlyrics, track, artist), daemon=True
+            ))
 
-        # 2. lrclib.net direct HTTP
-        if not lines and HAS_REQUESTS:
-            lines = self._fetch_lrclib(track, artist)
+        for t in tasks:
+            t.start()
 
-        # 3. syncedlyrics library (Lrclib → Musixmatch → …)
-        if not lines and HAS_SYNCED:
-            lines = self._fetch_syncedlyrics(track, artist)
+        # Wait up to 10 s for any provider to succeed
+        result_event.wait(timeout=10)
 
-        if lines:
-            self.lyrics_lines = lines
-            self._sync_event.set()   # wake sync thread immediately
+        if winner:
+            self.lyrics_lines = list(winner)
+            self._sync_event.set()
         else:
             self.lyrics_lines = []
             self.root.after(0, lambda: self.main_label.configure(
@@ -466,7 +487,7 @@ end tell
             r = _req.get(
                 "https://open.spotify.com/api/token",
                 headers={"User-Agent": "Mozilla/5.0"},
-                timeout=5,
+                timeout=4,
             )
             if r.ok:
                 data = r.json()
@@ -491,7 +512,7 @@ end tell
                     "app-platform": "WebPlayer",
                     "User-Agent": "Mozilla/5.0",
                 },
-                timeout=6,
+                timeout=4,
             )
             if r.ok:
                 data  = r.json()
@@ -516,7 +537,7 @@ end tell
             r = _req.get(
                 f"https://lrclib.net/api/get?{q}",
                 headers={"User-Agent": "SpotifyLyricsOverlay/2.0"},
-                timeout=6,
+                timeout=4,
             )
             if r.ok:
                 data = r.json()
