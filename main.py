@@ -90,6 +90,10 @@ class LyricsStrip:
         # Wakes the lyric-sync thread on seek, track-change, or play/pause
         self._sync_event = threading.Event()
 
+        # Permission guidance: track how many consecutive polls returned nothing
+        self._consecutive_empty = 0
+        self._ever_connected    = False
+
         # ── user controls ───────────────────────────────────────────────────
         self.sync_offset: float = float(self.cfg.get("sync_offset", 0.0))
         self.opacity    : float = float(self.cfg["opacity"])
@@ -584,6 +588,26 @@ end tell
         self._sync_event.set()
         self.main_label.configure(text="♫   Re-fetching lyrics…")
 
+    # ── Permission guidance ───────────────────────────────────────────────────
+
+    def _show_permission_guidance(self):
+        """
+        Called after several seconds of empty AppleScript results with no
+        prior successful query — almost always means Automation permission
+        hasn't been granted.  Show a clear message and open System Settings.
+        """
+        msg = "⚠️  Allow Spotify access: System Settings → Privacy & Security → Automation → SpotifyLyrics ✓"
+        self.main_label.configure(text=msg)
+        self.next_label.configure(text="")
+        # Open Automation pane directly so the user can flip the switch
+        try:
+            subprocess.Popen([
+                "open",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+            ])
+        except Exception:
+            pass
+
     # ── Spotify poll thread ───────────────────────────────────────────────────
 
     def _poll_loop(self):
@@ -597,7 +621,9 @@ end tell
                 state = self._query_spotify()
 
                 if state:
-                    self._miss_count = 0
+                    self._miss_count       = 0
+                    self._consecutive_empty = 0
+                    self._ever_connected    = True
                     new_pos  = state["position"]
                     new_wall = state["wall"]
                     key      = f"{state['track']}||{state['artist']}"
@@ -639,7 +665,14 @@ end tell
                         self._sync_event.set()
 
                 else:
-                    self._miss_count += 1
+                    self._miss_count        += 1
+                    self._consecutive_empty += 1
+
+                    # After ~5 s of empty results with no prior success, almost
+                    # certainly an Automation permission problem — guide the user.
+                    if not self._ever_connected and self._consecutive_empty == 10:
+                        self.root.after(0, self._show_permission_guidance)
+
                     if self._miss_count >= 3:
                         with self._state_lock:
                             self.is_playing = False

@@ -74,14 +74,20 @@ PLIST="$PROJ/SpotifyLyrics.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion '12.0'" "$PLIST" 2>/dev/null || \
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string '12.0'" "$PLIST"
 
+# Re-sign after plist edits so Info.plist is bound to the signature.
+# Without this, macOS TCC sees "Info.plist=not bound" and never shows the
+# Automation permission dialog, causing all AppleScript calls to silently fail.
+echo "→  Re-signing app bundle…"
+codesign --force --deep --sign - "$PROJ/SpotifyLyrics.app"
+
 # ── 5. Clean up build artefacts ───────────────────────────────────────────
 rm -rf "$PROJ/build" "$PROJ/dist" "$PROJ/SpotifyLyrics.spec"
 
 # ── 6. Install to /Applications (using ditto to preserve symlinks) ────────
 echo "→  Installing to /Applications…"
-rm -rf /Applications/SpotifyLyrics.app
+osascript -e 'do shell script "rm -rf /Applications/SpotifyLyrics.app" with administrator privileges' 2>/dev/null || rm -rf /Applications/SpotifyLyrics.app 2>/dev/null || true
 ditto "$PROJ/SpotifyLyrics.app" /Applications/SpotifyLyrics.app
-xattr -dr com.apple.quarantine /Applications/SpotifyLyrics.app 2>/dev/null
+osascript -e 'do shell script "xattr -dr com.apple.quarantine /Applications/SpotifyLyrics.app" with administrator privileges' 2>/dev/null || true
 
 echo ""
 echo "✓  Built and installed: /Applications/SpotifyLyrics.app"
